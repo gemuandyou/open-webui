@@ -377,7 +377,8 @@
 
 	let history = {
 		messages: {},
-		currentId: null
+		currentId: null,
+		newSession: false
 	};
 
 	let taskIds = null;
@@ -2507,6 +2508,11 @@
 
 		// Create user message
 		let userMessageId = uuidv4();
+		const isNewSession = history.newSession ?? false;
+		if (isNewSession) {
+			history.newSession = false;
+		}
+
 		let userMessage = {
 			id: userMessageId,
 			parentId: history.currentId ?? null,
@@ -2515,7 +2521,8 @@
 			content: inputContent,
 			files: _files.length > 0 ? _files : undefined,
 			timestamp: Math.floor(Date.now() / 1000), // Unix epoch
-			models: selectedModels
+			models: selectedModels,
+			newSession: isNewSession
 		};
 
 		// Add message to history and Set currentId to messageId
@@ -2646,6 +2653,22 @@
 		}
 	};
 
+	$: commandContext = {
+		history,
+		chatId: $chatId,
+		selectedModels,
+		temporaryChatEnabled: $temporaryChatEnabled,
+		contextCompactionEnabled,
+		isActive,
+		messageInput,
+		toast,
+		i18n,
+		goto,
+		setPrompt: (val: string) => {
+			prompt = val;
+		}
+	};
+
 	const submitHandler = async (userPrompt, { _raw = false } = {}) => {
 		console.log('submitHandler', userPrompt, $chatId);
 
@@ -2667,6 +2690,14 @@
 		}
 		if (String(userPrompt).trim() === '/fork') {
 			await handleForkChat();
+			return;
+		}
+		if (String(userPrompt).trim() === '/new') {
+			history.newSession = true;
+			prompt = '';
+			messageInput?.setText('');
+			toast.message($i18n.t('New session started.'));
+			document.getElementById('chat-input')?.focus();
 			return;
 		}
 
@@ -2877,11 +2908,29 @@
 		// Re-clone history so sendMessageSocket gets the response messages we just added
 		_history = structuredClone(history);
 
+		// Single request — backend fans out to all models
+		const primaryModelId = selectedModelIds[0];
+		const primaryModel = $models.filter((m) => m.id === primaryModelId).at(0);
+		const primaryResponseMessageId = messageIdsList[0]?.message_id;
+
+		// Build the message list for the LLM, trimming old context if a new session was started
+		let messagesForLLM =
+			messages && messages.length > 0
+				? messages
+				: createMessagesList(_history, primaryResponseMessageId ?? parentId);
+
+		// If new session, trim old context: only include messages from the
+		// newSession marker onwards (UI still shows full history via parentId chain)
+		const newSessionStartIdx = messagesForLLM.findIndex((m) => m.newSession);
+		if (newSessionStartIdx > 0) {
+			messagesForLLM = messagesForLLM.slice(newSessionStartIdx);
+		}
+
 		// Vision capability check
 		for (const mid of selectedModelIds) {
 			const model = $models.filter((m) => m.id === mid).at(0);
 			if (model) {
-				const hasImages = createMessagesList(_history, parentId).some((message) =>
+				const hasImages = messagesForLLM.some((message) =>
 					message.files?.some(
 						(file) => file.type === 'image' || (file?.content_type ?? '').startsWith('image/')
 					)
@@ -2901,21 +2950,15 @@
 			}
 		}
 
-		// Single request — backend fans out to all models
-		const primaryModelId = selectedModelIds[0];
-		const primaryModel = $models.filter((m) => m.id === primaryModelId).at(0);
-		const primaryResponseMessageId = messageIdsList[0]?.message_id;
-
 		if (primaryModel && primaryResponseMessageId) {
 			const chatEventEmitter = await getChatEventEmitter(primaryModel.id, _chatId);
 
 			try {
 				scrollToBottom();
+
 				await sendMessageSocket(
 					primaryModel,
-					messages && messages.length > 0
-						? messages
-						: createMessagesList(_history, primaryResponseMessageId),
+					messagesForLLM,
 					_history,
 					primaryResponseMessageId,
 					_chatId,
@@ -3970,8 +4013,9 @@
 										bind:dragged
 										dropzoneId={messageInputDropzoneId}
 										chatId={$chatId}
-										{contextUsage}
+								{contextUsage}
 										{contextCompactionEnabled}
+										{commandContext}
 										compactHandler={handleManualCompact}
 										statusHandler={handleStatusCommand}
 										forkHandler={handleForkChat}
@@ -4035,8 +4079,6 @@
 											}
 										}}
 									/>
-
-									<div
 										class="absolute bottom-1 text-xs text-gray-500 text-center line-clamp-1 right-0 left-0"
 									>
 										<!-- {$i18n.t('LLMs can make mistakes. Verify important information.')} -->
@@ -4091,6 +4133,7 @@
 										chatId={$chatId}
 										{contextUsage}
 										{contextCompactionEnabled}
+										{commandContext}
 										compactHandler={handleManualCompact}
 										statusHandler={handleStatusCommand}
 										forkHandler={handleForkChat}

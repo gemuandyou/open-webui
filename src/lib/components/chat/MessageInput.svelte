@@ -119,6 +119,7 @@
 	export let compactHandler: Function = () => {};
 	export let statusHandler: Function = () => {};
 	export let forkHandler: Function = () => {};
+	export let commandContext: any = null;
 	export let chatId = '';
 	export let contextUsage = null;
 	export let contextCompactionEnabled = false;
@@ -1189,6 +1190,7 @@
 					onCompact: compactHandler,
 					onStatus: statusHandler,
 					onFork: forkHandler,
+					commandContext,
 					onSelect: (e) => {
 						const { type, data } = e;
 

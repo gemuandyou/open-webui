@@ -5,6 +5,8 @@
 	import Skills from './Commands/Skills.svelte';
 	import Emojis from './Commands/Emojis.svelte';
 	import DropdownMenu from '$lib/components/common/DropdownMenu.svelte';
+	import { commandRegistry } from './Commands/CommandRegistry';
+	import type { CommandContext } from './Commands/CommandRegistry';
 
 	export let char = '';
 	export let query = '';
@@ -22,6 +24,7 @@
 	export let canFork: boolean | (() => boolean) = false;
 	export let forkDisabled: boolean | (() => boolean) = false;
 	export let contextUsage = null;
+	export let commandContext: CommandContext | null = null;
 
 	$: compactAvailable = typeof canCompact === 'function' ? canCompact() : canCompact;
 	$: isCompactDisabled =
@@ -89,20 +92,27 @@
 					forkDisabled={isForkDisabled}
 					{contextPercent}
 					{contextHasThreshold}
+					{commandContext}
 					onSelect={(e) => {
 						const { type, data } = e;
 
 						if (type === 'prompt') {
 							insertTextHandler(data.content);
-						} else if (type === 'command' && data.id === 'compact') {
-							insertTextHandler('');
-							onCompact();
-						} else if (type === 'command' && data.id === 'status') {
-							insertTextHandler('');
-							onStatus();
-						} else if (type === 'command' && data.id === 'fork') {
-							insertTextHandler('');
-							onFork();
+						} else if (type === 'command') {
+							const cmd = commandContext ? commandRegistry.get(data.id) : null;
+							if (cmd && cmd.handler) {
+								insertTextHandler('');
+								cmd.handler(commandContext);
+							} else {
+								insertTextHandler('');
+								if (data.id === 'compact') {
+									onCompact();
+								} else if (data.id === 'status') {
+									onStatus();
+								} else if (data.id === 'fork') {
+									onFork();
+								}
+							}
 						} else if (type === 'skill') {
 							command({
 								id: `${data.id}|${data.name}`,

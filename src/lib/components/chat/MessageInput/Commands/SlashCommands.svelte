@@ -5,7 +5,12 @@
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import Cube from '$lib/components/icons/Cube.svelte';
 
+	import { commandRegistry } from './CommandRegistry';
+	import './builtinCommands';
+
 	const i18n = getContext('i18n');
+
+	export let commandContext = null;
 
 	export let query = '';
 	export let onSelect = (e) => {};
@@ -29,17 +34,31 @@
 		: 0;
 	$: contextCircleOffset = 50.27 * (1 - contextCirclePercent / 100);
 
-	$: commandItems = [
-		...(canCompact && 'compact'.startsWith(query.toLowerCase())
-			? [{ type: 'command', data: { id: 'compact' } }]
-			: []),
-		...(canFork && 'fork'.startsWith(query.toLowerCase())
-			? [{ type: 'command', data: { id: 'fork' } }]
-			: []),
-		...(canStatus && 'status'.startsWith(query.toLowerCase())
-			? [{ type: 'command', data: { id: 'status' } }]
-			: [])
-	];
+	$: visibleCommands = commandContext
+		? commandRegistry.getVisible(commandContext)
+		: [];
+
+	$: disabledCommandIds = new Set(
+		visibleCommands.filter((cmd) => commandContext && cmd.disabled?.(commandContext)).map((cmd) => cmd.id)
+	);
+
+	$: commandItems = commandContext
+		? visibleCommands
+				.filter((cmd) =>
+					query ? cmd.id.toLowerCase().includes(query.toLowerCase()) : true
+				)
+				.map((cmd) => ({ type: 'command', data: { id: cmd.id } }))
+		: [
+				...(canCompact && 'compact'.startsWith(query.toLowerCase())
+					? [{ type: 'command', data: { id: 'compact' } }]
+					: []),
+				...(canFork && 'fork'.startsWith(query.toLowerCase())
+					? [{ type: 'command', data: { id: 'fork' } }]
+					: []),
+				...(canStatus && 'status'.startsWith(query.toLowerCase())
+					? [{ type: 'command', data: { id: 'status' } }]
+					: [])
+			];
 
 	$: filteredPrompts = prompts
 		.filter((p) => p.command.toLowerCase().includes(query.toLowerCase()))
@@ -48,7 +67,9 @@
 	$: filteredItems = [
 		...commandItems,
 		...filteredPrompts.map((data) => ({ type: 'prompt', data })),
-		...skills.map((data) => ({ type: 'skill', data }))
+		...(skills
+			? skills.map((data) => ({ type: 'skill', data }))
+			: [])
 	];
 
 	$: if (query) {
@@ -91,12 +112,15 @@
 
 	export const select = async () => {
 		const item = filteredItems[selectedIdx];
-		if (item?.type === 'command' && item.data?.id === 'compact' && compactDisabled) {
+		if (!item) return;
+
+		if (
+			item.type === 'command' &&
+			disabledCommandIds.has(item.data.id)
+		) {
 			return;
 		}
-		if (item?.type === 'command' && item.data?.id === 'fork' && forkDisabled) {
-			return;
-		}
+
 		if (item) {
 			onSelect(item);
 		}
@@ -118,6 +142,31 @@
 			<span class="break-words font-normal">${name}</span>${description ? `: <span class="break-words opacity-80">${description}</span>` : ''}
 		</div>`;
 	};
+
+	const isCommandDisabled = (id: string) => {
+		if (commandContext) {
+			return disabledCommandIds.has(id);
+		}
+		// Backward-compatible checks
+		if (id === 'compact' && compactDisabled) return true;
+		if (id === 'fork' && forkDisabled) return true;
+		return false;
+	};
+
+	const getCommandLabel = (id: string) => {
+		const cmd = commandContext ? commandRegistry.get(id) : null;
+		return cmd?.label ?? (id === 'compact' ? 'Compact' : id === 'fork' ? 'Fork' : id === 'status' ? 'Status' : 'New Session');
+	};
+
+	const getCommandDescription = (id: string) => {
+		const cmd = commandContext ? commandRegistry.get(id) : null;
+		return cmd?.description ?? '';
+	};
+
+	const isCompact = (id: string) => id === 'compact';
+	const isFork = (id: string) => id === 'fork';
+	const isStatus = (id: string) => id === 'status';
+	const isNew = (id: string) => id === 'new';
 </script>
 
 {#if commandItems.length > 0}
@@ -126,17 +175,17 @@
 	</div>
 
 	{#each commandItems as item, commandIdx}
-		{#if item.data.id === 'compact'}
-			<Tooltip content="Shorten older messages so this chat can keep going." placement="top">
+		{#if isCompact(item.data.id)}
+			<Tooltip content={getCommandDescription(item.data.id) || "Shorten older messages so this chat can keep going."} placement="top">
 				<button
 					type="button"
 					aria-label="Compact: shorten older messages so this chat can keep going."
 					class="slash-command-row flex items-center gap-2 w-full h-6 px-2 rounded-xl text-xs text-left transition-colors duration-75
 						{commandIdx === selectedIdx ? 'app-interactive-active' : ''} disabled:opacity-50"
-					disabled={compactDisabled}
+					disabled={isCommandDisabled(item.data.id)}
 					on:mousedown={(e) => e.preventDefault()}
 					on:click={() => {
-						if (!compactDisabled) {
+						if (!isCommandDisabled(item.data.id)) {
 							onSelect(item);
 						}
 					}}
@@ -173,7 +222,7 @@
 						{/if}
 					</span>
 					<span class="flex-1 min-w-0 flex items-baseline gap-1.5 overflow-hidden">
-						<span class="truncate">Compact</span>
+						<span class="truncate">{getCommandLabel(item.data.id)}</span>
 						{#if contextHasThreshold}
 							<span class="app-muted text-[0.625rem] truncate shrink-0">
 								{contextCirclePercent}% full
@@ -182,17 +231,17 @@
 					</span>
 				</button>
 			</Tooltip>
-		{:else if item.data.id === 'fork'}
-			<Tooltip content="Fork the current chat branch into a new chat." placement="top">
+		{:else if isFork(item.data.id)}
+			<Tooltip content={getCommandDescription(item.data.id) || "Fork the current chat branch into a new chat."} placement="top">
 				<button
 					type="button"
 					aria-label="Fork: fork the current chat branch into a new chat."
 					class="slash-command-row flex items-center gap-2 w-full h-6 px-2 rounded-xl text-xs text-left transition-colors duration-75
 						{commandIdx === selectedIdx ? 'app-interactive-active' : ''} disabled:opacity-50"
-					disabled={forkDisabled}
+					disabled={isCommandDisabled(item.data.id)}
 					on:mousedown={(e) => e.preventDefault()}
 					on:click={() => {
-						if (!forkDisabled) {
+						if (!isCommandDisabled(item.data.id)) {
 							onSelect(item);
 						}
 					}}
@@ -221,13 +270,15 @@
 						</svg>
 					</span>
 					<span class="flex-1 min-w-0 flex items-baseline gap-1.5 overflow-hidden">
-						<span class="truncate">Fork</span>
-						<span class="app-muted text-[0.625rem] truncate shrink-0">Current branch</span>
+						<span class="truncate">{getCommandLabel(item.data.id)}</span>
+						<span class="app-muted text-[0.625rem] truncate shrink-0">
+							{$i18n.t('Current branch')}
+						</span>
 					</span>
 				</button>
 			</Tooltip>
-		{:else if item.data.id === 'status'}
-			<Tooltip content="Check what is running in this chat." placement="top">
+		{:else if isStatus(item.data.id)}
+			<Tooltip content={getCommandDescription(item.data.id) || "Check what is running in this chat."} placement="top">
 				<button
 					type="button"
 					aria-label="Status: check what is running in this chat."
@@ -259,9 +310,64 @@
 						</svg>
 					</span>
 					<span class="flex-1 min-w-0 flex items-baseline gap-1.5 overflow-hidden">
-						<span class="truncate">Status</span>
+						<span class="truncate">{getCommandLabel(item.data.id)}</span>
 						<span class="app-muted text-[0.625rem] truncate shrink-0">
-							Check what is running in this chat.
+							{$i18n.t('Check what is running in this chat.')}
+						</span>
+					</span>
+				</button>
+			</Tooltip>
+		{:else}
+			<Tooltip content={getCommandDescription(item.data.id) || ''} placement="top">
+				<button
+					type="button"
+					aria-label={`${getCommandLabel(item.data.id)} command`}
+					class="slash-command-row flex items-center gap-2 w-full h-6 px-2 rounded-xl text-xs text-left transition-colors duration-75
+						{commandIdx === selectedIdx ? 'app-interactive-active' : ''}"
+					on:mousedown={(e) => e.preventDefault()}
+					on:click={() => {
+						onSelect(item);
+					}}
+					on:mouseenter={() => {
+						selectedIdx = commandIdx;
+					}}
+					on:focus={() => {}}
+					data-selected={commandIdx === selectedIdx}
+				>
+					<span class="app-icon-muted flex items-center justify-center w-4 shrink-0">
+						{#if isNew(item.data.id)}
+							<svg
+								class="size-3.5"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="1.75"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								aria-hidden="true"
+							>
+								<path d="M12 5v14" />
+								<path d="M5 12h14" />
+							</svg>
+						{:else}
+							<svg
+								class="size-3.5"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="1.75"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								aria-hidden="true"
+							>
+								<circle cx="12" cy="12" r="10" />
+							</svg>
+						{/if}
+					</span>
+					<span class="flex-1 min-w-0 flex items-baseline gap-1.5 overflow-hidden">
+						<span class="truncate">{getCommandLabel(item.data.id)}</span>
+						<span class="app-muted text-[0.625rem] truncate shrink-0">
+							{getCommandDescription(item.data.id)}
 						</span>
 					</span>
 				</button>
